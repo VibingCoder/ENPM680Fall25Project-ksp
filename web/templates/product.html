@@ -1,0 +1,35 @@
+{{ define "product" }}{{ template "header" . }}
+<article>
+  <h1>{{ .P.Title }}</h1>
+  <p><strong>${{ printf "%.2f" .P.Price }}</strong> — {{ .P.Condition }}</p>
+  <p>{{ .P.Description }}</p>
+
+  <section>
+    <h3>Check Availability</h3>
+    <input id="zip" placeholder="ZIP or region"/>
+    <button onclick="checkAvail()">Check</button>
+    <pre id="avail"></pre>
+  </section>
+
+  <form method="post" action="/cart" style="margin-top:1rem">
+    <input type="hidden" name="productId" value="{{ .P.ID }}"/>
+    <label>Qty <input type="number" name="qty" value="1" min="1" style="width:4em"></label>
+    <button type="submit">Add to Cart</button>
+  </form>
+
+  <form method="post" action="/wishlist" style="margin-top:0.5rem">
+    <input type="hidden" name="productId" value="{{ .P.ID }}"/>
+    <button type="submit">Save to Wishlist</button>
+  </form>
+</article>
+
+<script>
+async function checkAvail(){
+  const zip = document.getElementById('zip').value.trim();
+  if (!zip) { document.getElementById('avail').textContent = 'Enter a ZIP/postal code'; return; }
+  const res = await fetch(`/api/v1/availability?productId={{ .P.ID }}&region=${encodeURIComponent(zip)}`);
+  const data = await res.json();
+  document.getElementById('avail').textContent = JSON.stringify(data, null, 2);
+}
+</script>
+{{ template "footer" . }}{{ end }}

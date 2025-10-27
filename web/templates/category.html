@@ -1,0 +1,13 @@
+{{ define "category" }}{{ template "header" . }}
+<h1>Category: {{ .CategoryID }}</h1>
+<div class="grid">
+  {{ range .Products }}
+  <article class="card">
+    <h3><a href="/product/{{ .ID }}">{{ .Title }}</a></h3>
+    <p>${{ printf "%.2f" .Price }} — {{ .Condition }}</p>
+  </article>
+  {{ else }}
+  <p>No items in this category yet</p>
+  {{ end }}
+</div>
+{{ template "footer" . }}{{ end }}

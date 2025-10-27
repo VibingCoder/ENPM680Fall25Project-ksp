@@ -1,0 +1,10 @@
+{{ define "home" }}{{ template "header" . }}
+<h1>Categories</h1>
+<ul>
+  {{ range .Categories }}
+  <li><a href="/category/{{ .ID }}">{{ .Name }}</a></li>
+  {{ else }}
+  <li>No categories</li>
+  {{ end }}
+</ul>
+{{ template "footer" . }}{{ end }}
