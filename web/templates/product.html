@@ -1,24 +1,30 @@
 {{ define "product" }}{{ template "header" . }}
 <article>
+
   <h1>{{ .P.Title }}</h1>
+  <div class="hero-wrap">
+    <img class="hero" src="/media/products/{{ .P.ID }}/main.jpg" alt="{{ .P.Title }}" onerror="this.style.display='none'" style="width: 500px; height: auto;">
+  </div>
   <p><strong>${{ printf "%.2f" .P.Price }}</strong> — {{ .P.Condition }}</p>
   <p>{{ .P.Description }}</p>
 
   <section>
     <h3>Check Availability</h3>
-    <input id="zip" placeholder="ZIP or region"/>
+    <input id="zip" placeholder="Enter ZIP code" inputmode="numeric" pattern="[0-9]{5}" maxlength="5"/>
     <button onclick="checkAvail()">Check</button>
     <pre id="avail"></pre>
   </section>
 
   <form method="post" action="/cart" style="margin-top:1rem">
     <input type="hidden" name="productId" value="{{ .P.ID }}"/>
+    <input type="hidden" name="csrf" value="{{ .CSRFToken }}">
     <label>Qty <input type="number" name="qty" value="1" min="1" style="width:4em"></label>
     <button type="submit">Add to Cart</button>
   </form>
 
   <form method="post" action="/wishlist" style="margin-top:0.5rem">
     <input type="hidden" name="productId" value="{{ .P.ID }}"/>
+    <input type="hidden" name="csrf" value="{{ .CSRFToken }}">
     <button type="submit">Save to Wishlist</button>
   </form>
 </article>

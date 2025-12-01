@@ -19,15 +19,16 @@ type OrderService struct {
 	Carts  *repos.CartRepo
 	Inv    *repos.InventoryRepo
 	Orders *repos.OrderRepo
+	Prods  *repos.ProductRepo
 }
 
-func NewOrderService(carts *repos.CartRepo, inv *repos.InventoryRepo, orders *repos.OrderRepo) *OrderService {
-	return &OrderService{Carts: carts, Inv: inv, Orders: orders}
+func NewOrderService(carts *repos.CartRepo, inv *repos.InventoryRepo, orders *repos.OrderRepo, prods *repos.ProductRepo) *OrderService {
+	return &OrderService{Carts: carts, Inv: inv, Orders: orders, Prods: prods}
 }
 
-func (s *OrderService) Place(sessionID, region, fulfillment string, contact Contact) (string, error) {
+func (s *OrderService) Place(sessionID, region, fulfillment string, contact Contact) (string, float64, float64, error) {
 	if region == "" {
-		return "", errors.New("missing region")
+		return "", 0, 0, errors.New("missing region")
 	}
 	if fulfillment == "" {
 		fulfillment = "delivery"
@@ -35,51 +36,57 @@ func (s *OrderService) Place(sessionID, region, fulfillment string, contact Cont
 
 	cartID, err := s.Carts.EnsureCart(sessionID)
 	if err != nil {
-		return "", err
+		return "", 0, 0, err
 	}
 
 	items, err := s.Carts.Items(cartID)
 	if err != nil {
-		return "", err
+		return "", 0, 0, err
 	}
 	if len(items) == 0 {
-		return "", errors.New("cart empty")
+		return "", 0, 0, errors.New("cart empty")
 	}
 
-	// pre-check stock
-	for _, it := range items {
+	// pre-check stock and recompute totals from trusted product data
+	serverTotal := 0.0
+	clientTotal := 0.0
+	for i, it := range items {
 		qty, err := s.Inv.Qty(it.ProductID, region)
 		if err != nil && err != sql.ErrNoRows {
-			return "", err
+			return "", 0, 0, err
 		}
 		if qty < it.Qty {
-			return "", fmt.Errorf("insufficient stock for %s (need %d, have %d)", it.ProductID, it.Qty, qty)
+			return "", 0, 0, fmt.Errorf("insufficient stock for %s (need %d, have %d)", it.ProductID, it.Qty, qty)
 		}
+		// overwrite price/condition with current catalog data
+		p, err := s.Prods.Get(it.ProductID)
+		if err != nil {
+			return "", 0, 0, err
+		}
+		clientTotal += it.Price * float64(it.Qty)
+		items[i].Price = p.Price
+		items[i].Condition = p.Condition
+		serverTotal += p.Price * float64(it.Qty)
 	}
 
 	// decrement
 	for _, it := range items {
 		if err := s.Inv.Decrement(it.ProductID, region, it.Qty); err != nil {
-			return "", err
+			return "", 0, 0, err
 		}
-	}
-
-	// totals
-	total := 0.0
-	for _, it := range items {
-		total += it.Price * float64(it.Qty)
 	}
 
 	// create order
 	orderID := uuid.NewString()
-	if err := s.Orders.Create(orderID, sessionID, region, fulfillment, contact.Name, contact.Email, total); err != nil {
-		return "", err
+	if err := s.Orders.Create(orderID, sessionID, region, fulfillment, contact.Name, contact.Email, serverTotal); err != nil {
+		return "", 0, 0, err
 	}
 	for _, it := range items {
 		if err := s.Orders.InsertItem(orderID, it.ProductID, it.Qty, it.Price, it.Condition); err != nil {
-			return "", err
+			return "", 0, 0, err
 		}
 	}
 	_ = s.Carts.Clear(cartID)
-	return orderID, nil
+	return orderID, serverTotal, clientTotal, nil
+
 }

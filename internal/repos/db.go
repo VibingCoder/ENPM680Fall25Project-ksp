@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"github.com/jmoiron/sqlx"
+	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
 
@@ -19,12 +20,16 @@ func OpenDB(dsn string) (*sqlx.DB, error) {
 	if err := ensureSchema(db); err != nil {
 		return nil, err
 	}
-	// Seed baseline data if DB is empty
+	// Seed baseline data if DB is empty (categories/products/inventory)
 	if err := seedIfEmpty(db); err != nil {
 		return nil, err
 	}
 	// Add two more products (idempotent; safe to run every start)
 	if err := seedDefaultData(db); err != nil {
+		return nil, err
+	}
+	// Ensure users exist (idempotent; safe to run every start)
+	if err := seedUsers(db); err != nil {
 		return nil, err
 	}
 
@@ -126,6 +131,26 @@ CREATE TABLE IF NOT EXISTS wishlist_items(
   created_at  TEXT,
   PRIMARY KEY (wishlist_id, product_id)
 );
+
+-- Users & Sessions
+CREATE TABLE IF NOT EXISTS users(
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('USER','ADMIN')),
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(LOWER(email));
+
+CREATE TABLE IF NOT EXISTS sessions(
+  id TEXT PRIMARY KEY,               -- same value as your 'sid' cookie
+  user_id TEXT NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  last_seen  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 `
 	_, err := db.Exec(schema)
 	return err
@@ -165,7 +190,7 @@ func seedIfEmpty(db *sqlx.DB) error {
 }
 
 // seedDefaultData inserts two extra products if they don't already exist.
-// Safe to run on every startup (idempotent via WHERE NOT EXISTS / ON CONFLICT).
+// Safe to run on every startup (idempotent).
 func seedDefaultData(db *sqlx.DB) error {
 	tx := db.MustBegin()
 	defer func() { _ = tx.Rollback() }()
@@ -191,7 +216,7 @@ func seedDefaultData(db *sqlx.DB) error {
 			'snes-001', 'retro-consoles',
 			'Super Nintendo (SNES) Console',
 			'Classic 16-bit SNES console with controller. Tested and cleaned.',
-			'SECOND_HAND', 199.00, '[]', 1, CURRENT_TIMESTAMP, NULL
+			'SECOND_HAND', 199.00, '["products/snes-001/main.jpg"]', 1, CURRENT_TIMESTAMP, NULL
 		WHERE NOT EXISTS (SELECT 1 FROM products WHERE id='snes-001')
 	`)
 
@@ -204,7 +229,7 @@ func seedDefaultData(db *sqlx.DB) error {
 			'radio-zenith-500', 'vintage-radios',
 			'Zenith Royal 500 (1960s) Transistor Radio',
 			'Iconic vintage pocket radio. Cosmetic wear; works with 9V battery.',
-			'SECOND_HAND', 89.00, '[]', 1, CURRENT_TIMESTAMP, NULL
+			'SECOND_HAND', 89.00, '["products/radio-zenith-500/main.jpg"]', 1, CURRENT_TIMESTAMP, NULL
 		WHERE NOT EXISTS (SELECT 1 FROM products WHERE id='radio-zenith-500')
 	`)
 
@@ -218,6 +243,40 @@ func seedDefaultData(db *sqlx.DB) error {
 		  ('radio-zenith-500', '10001', 0)
 		ON CONFLICT(product_id, region_code) DO UPDATE SET qty = excluded.qty
 	`)
+
+	return tx.Commit()
+}
+
+// seedUsers ensures two USERs and one ADMIN exist (idempotent).
+func seedUsers(db *sqlx.DB) error {
+	type u struct {
+		ID, Email, Name, Role, Hash string
+	}
+	mk := func(id, email, name, role, raw string) u {
+		h, _ := bcrypt.GenerateFromPassword([]byte(raw), 12)
+		return u{ID: id, Email: email, Name: name, Role: role, Hash: string(h)}
+	}
+
+	users := []u{
+		mk("u-alice", "alice@retrobytes.test", "Alice", "USER", "Passw0rd!"),
+		mk("u-bob", "bob@retrobytes.test", "Bob", "USER", "Passw0rd!"),
+		mk("u-luke", "luke@retrobytes.test", "Luke", "USER", "Passw0rd!"),
+		mk("u-yoda", "yoda@retrobytes.test", "Yoda", "USER", "Passw0rd!"),
+		mk("u-admin", "admin@retrobytes.test", "Admin", "ADMIN", "Passw0rd!"),
+	}
+
+	tx := db.MustBegin()
+	defer func() { _ = tx.Rollback() }()
+
+	for _, x := range users {
+		if _, err := tx.Exec(`
+			INSERT INTO users(id,email,name,password_hash,role)
+			VALUES(?,?,?,?,?)
+			ON CONFLICT(email) DO NOTHING
+		`, x.ID, x.Email, x.Name, x.Hash, x.Role); err != nil {
+			return err
+		}
+	}
 
 	return tx.Commit()
 }

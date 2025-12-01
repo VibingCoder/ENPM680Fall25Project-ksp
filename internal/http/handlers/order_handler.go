@@ -6,6 +6,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
+	"retrobytes/internal/domain"
+	applog "retrobytes/internal/log"
 	"retrobytes/internal/repos"
 	"retrobytes/internal/services"
 	"retrobytes/internal/validate"
@@ -15,6 +17,7 @@ type OrderHandler struct {
 	Cart  *services.CartService
 	Order *services.OrderService
 	Repo  *repos.OrderRepo
+	Auth  *services.AuthService
 }
 
 type OrderDeps struct {
@@ -31,6 +34,8 @@ func (h *OrderHandler) ensureSID(c *fiber.Ctx) string {
 			Value:    sid,
 			Path:     "/",
 			HTTPOnly: true,
+			SameSite: fiber.CookieSameSiteLaxMode,
+			Secure:   false, // enable true behind TLS
 		})
 	}
 	return sid
@@ -39,9 +44,10 @@ func (h *OrderHandler) ensureSID(c *fiber.Ctx) string {
 func (h *OrderHandler) Checkout(c *fiber.Ctx) error {
 	cv, err := h.Cart.View(h.ensureSID(c))
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		applog.Error(c, "checkout.load", err, nil)
+		return c.Status(fiber.StatusInternalServerError).Render("notfound", fiber.Map{"Message": "Could not load your cart"})
 	}
-	return c.Render("checkout", fiber.Map{"Cart": cv})
+	return render(c, "checkout", fiber.Map{"Cart": cv})
 }
 
 func (h *OrderHandler) Place(c *fiber.Ctx) error {
@@ -50,17 +56,20 @@ func (h *OrderHandler) Place(c *fiber.Ctx) error {
 	// Validate region/ZIP
 	region, ok := validate.Region(c.FormValue("region"))
 	if !ok {
+		applog.Security(c, "validation.fail", map[string]any{"field": "region"})
 		return c.Status(fiber.StatusBadRequest).SendString("invalid region/ZIP")
 	}
 
 	// Validate email and name
 	email, ok := validate.Email(c.FormValue("email"))
 	if !ok {
+		applog.Security(c, "validation.fail", map[string]any{"field": "email"})
 		return c.Status(fiber.StatusBadRequest).SendString("invalid email")
 	}
-	name := strings.TrimSpace(c.FormValue("name"))
-	if name == "" {
-		return c.Status(fiber.StatusBadRequest).SendString("name is required")
+	name, ok := validate.Name(c.FormValue("name"))
+	if !ok {
+		applog.Security(c, "validation.fail", map[string]any{"field": "name"})
+		return c.Status(fiber.StatusBadRequest).SendString("name must be 1-20 characters")
 	}
 
 	// Normalize fulfillment
@@ -71,11 +80,18 @@ func (h *OrderHandler) Place(c *fiber.Ctx) error {
 
 	contact := services.Contact{Name: name, Email: email}
 
-	orderID, err := h.Order.Place(sid, region, fulfillment, contact)
+	orderID, serverTotal, clientTotal, err := h.Order.Place(sid, region, fulfillment, contact)
 	if err != nil {
 		// business rule errors (e.g., insufficient stock) surface as 400
-		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		applog.Security(c, "order.place.fail", map[string]any{"sid": sid, "error": err.Error()})
+		return c.Status(fiber.StatusBadRequest).SendString("Could not place order. Please review quantities and try again.")
 	}
+	applog.Audit(c, "order.place", map[string]any{
+		"order_id":     orderID,
+		"server_total": serverTotal,
+		"client_total": clientTotal,
+		"mismatch":     serverTotal != clientTotal,
+	})
 
 	// Show detailed confirmation page
 	return c.Redirect("/order/" + orderID)
@@ -92,5 +108,46 @@ func (h *OrderHandler) View(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).Render("notfound", fiber.Map{"Message": "Order not found"})
 	}
 
-	return c.Render("order", fiber.Map{"Order": o, "Items": items})
+	// Ownership check: session owner or same user via sessions.user_id; admins allowed
+	sid := c.Cookies("sid")
+	var uID string
+	var uRole string
+	if h.Auth != nil && sid != "" {
+		if u, err := h.Auth.CurrentUser(sid); err == nil && u != nil {
+			uID = u.ID
+			uRole = u.Role
+		}
+	}
+	if !(sid != "" && sid == o.SessionID) && !(uID != "" && uID == o.UserID) {
+		if uRole == "ADMIN" {
+			return render(c, "order", fiber.Map{"Order": o, "Items": items})
+		}
+		applog.Security(c, "access.denied.order", map[string]any{"order_id": oid})
+		return c.Status(fiber.StatusNotFound).Render("notfound", fiber.Map{"Message": "Order not found"})
+	}
+
+	return render(c, "order", fiber.Map{"Order": o, "Items": items})
+}
+
+// History lists orders for the current logged-in user.
+func (h *OrderHandler) History(c *fiber.Ctx) error {
+	u, _ := c.Locals("user").(*domain.User)
+	// If RequireUser is used, user is guaranteed; fallback to 404
+	if u == nil {
+		return c.Status(fiber.StatusNotFound).Render("notfound", fiber.Map{"Message": "Orders not available"})
+	}
+	orders, err := h.Repo.ListByUser(u.ID)
+	if err != nil {
+		applog.Error(c, "orders.history.fail", err, nil)
+		return c.Status(fiber.StatusInternalServerError).Render("notfound", fiber.Map{"Message": "Could not load orders"})
+	}
+	// Fallback: show session orders if none linked to user (e.g., pre-login)
+	if len(orders) == 0 {
+		if sid := c.Cookies("sid"); sid != "" {
+			if sessOrders, err := h.Repo.ListBySession(sid); err == nil && len(sessOrders) > 0 {
+				orders = sessOrders
+			}
+		}
+	}
+	return render(c, "order_history", fiber.Map{"Orders": orders})
 }

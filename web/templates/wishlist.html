@@ -11,6 +11,7 @@
     <td>
       <form method="post" action="/wishlist/delete" style="display:inline">
         <input type="hidden" name="productId" value="{{ .ProductID }}">
+        <input type="hidden" name="csrf" value="{{ $.CSRFToken }}">
         <button type="submit">Unsave</button>
       </form>
     </td>

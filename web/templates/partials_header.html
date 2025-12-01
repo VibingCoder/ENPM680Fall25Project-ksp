@@ -5,6 +5,7 @@
   <meta charset="utf-8"/>
   <title>Retro Bytes</title>
   <link rel="stylesheet" href="/static/style.css"/>
+  <meta name="csrf-token" content="{{ .CSRFToken }}">
 </head>
 <body>
 <header>
@@ -14,6 +15,17 @@
     <a href="/search">Search</a>
     <a href="/cart">Cart</a>
     <a href="/wishlist">Wishlist</a>
+    {{ if .User }}<a href="/orders">Orders</a>{{ end }}
+    {{ if and .User (eq .User.Role "ADMIN") }}<a href="/admin">Admin</a>{{ end }}
+    {{ if .User }}
+      <span class="nav-user">Signed in as {{ .User.Name }}</span>
+      <form method="post" action="/logout" style="display:inline">
+        <input type="hidden" name="csrf" value="{{ .CSRFToken }}">
+        <button type="submit" class="linklike">Logout</button>
+      </form>
+    {{ else }}
+      <a href="/login">Login</a>
+    {{ end }}
   </nav>
 </header>
 <main>

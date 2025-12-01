@@ -18,7 +18,7 @@ type Deps struct {
 	WishlistHandler  *WishlistHandler
 }
 
-func NewDeps(db *sqlx.DB, cfg config.Config) *Deps {
+func NewDeps(db *sqlx.DB, cfg config.Config, auth *services.AuthService) *Deps {
 	catRepo := repos.NewCategoryRepo(db)
 	prodRepo := repos.NewProductRepo(db)
 	invRepo := repos.NewInventoryRepo(db)
@@ -29,7 +29,7 @@ func NewDeps(db *sqlx.DB, cfg config.Config) *Deps {
 	catalogSvc := services.NewCatalogService(catRepo, prodRepo)
 	invSvc := services.NewInventoryService(invRepo)
 	cartSvc := services.NewCartService(cartRepo, prodRepo)
-	orderSvc := services.NewOrderService(cartRepo, invRepo, orderRepo)
+	orderSvc := services.NewOrderService(cartRepo, invRepo, orderRepo, prodRepo)
 	wishSvc := services.NewWishlistService(wishRepo)
 
 	return &Deps{
@@ -38,7 +38,7 @@ func NewDeps(db *sqlx.DB, cfg config.Config) *Deps {
 		InventoryHandler: &InventoryHandler{Inv: invSvc},
 		SearchHandler:    &SearchHandler{Catalog: catalogSvc},
 		CartHandler:      &CartHandler{Cart: cartSvc},
-		OrderHandler:     &OrderHandler{Cart: cartSvc, Order: orderSvc, Repo: orderRepo},
+		OrderHandler:     &OrderHandler{Cart: cartSvc, Order: orderSvc, Repo: orderRepo, Auth: auth},
 		WishlistHandler:  &WishlistHandler{Wish: wishSvc},
 	}
 }

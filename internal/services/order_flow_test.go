@@ -52,7 +52,7 @@ func TestOrderFlow_AddCartCheckout(t *testing.T) {
 
 	// services
 	cartSvc := services.NewCartService(cartRepo, prodRepo)
-	orderSvc := services.NewOrderService(cartRepo, invRepo, orderRepo)
+	orderSvc := services.NewOrderService(cartRepo, invRepo, orderRepo, prodRepo)
 
 	sid := "test-session"
 	if err := cartSvc.Add(sid, "gbc-001", 2); err != nil {
@@ -67,12 +67,15 @@ func TestOrderFlow_AddCartCheckout(t *testing.T) {
 		t.Fatalf("bad cart view: %+v", cv)
 	}
 
-	oid, err := orderSvc.Place(sid, "20742", "delivery", services.Contact{Name: "Tester", Email: "t@e.com"})
+	oid, serverTotal, clientTotal, err := orderSvc.Place(sid, "20742", "delivery", services.Contact{Name: "Tester", Email: "t@e.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if oid == "" {
 		t.Fatal("no order id")
+	}
+	if serverTotal == 0 || clientTotal == 0 {
+		t.Fatalf("totals should be set, got server=%v client=%v", serverTotal, clientTotal)
 	}
 
 	// inventory decremented from 5 to 3
